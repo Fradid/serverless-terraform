@@ -51,6 +51,24 @@ resource "aws_iam_role_policy" "dynamodb_access" {
   })
 }
 
+resource "aws_iam_role_policy" "comprehend_access" {
+  name = "comprehend_access_policy"
+  role = aws_iam_role.lambda_exec.id
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "comprehend:DetectSentiment",
+        "comprehend:DetectEntities",
+        "comprehend:DetectKeyPhrases",
+        "comprehend:DetectDominantLanguage"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 # Нова політика доступу до S3 для audit-log
 resource "aws_iam_role_policy" "s3_access" {
   name = "s3_audit_log_policy"

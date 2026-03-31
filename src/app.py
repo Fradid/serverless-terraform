@@ -15,6 +15,7 @@ if not LOG_BUCKET:
 dynamodb = boto3.resource("dynamodb")
 table = dynamodb.Table(TABLE_NAME)
 s3 = boto3.client("s3")
+comprehend = boto3.client("comprehend")
 
 
 def write_audit_log(action, data):
@@ -35,7 +36,6 @@ def write_audit_log(action, data):
 
 def handler(event, context):
     try:
-        
         http_method = event.get("httpMethod", "")
         path = event.get("path", "")
         query_params = event.get("queryStringParameters") or {}
@@ -57,8 +57,8 @@ def handler(event, context):
             task = {
                 "id": task_id,
                 "title": body.get("title"),
-                "priority": body.get("priority", "medium"),  # low / medium / high
-                "status": body.get("status", "open"),        # open / in_progress / done
+                "priority": body.get("priority", "medium"),
+                "status": body.get("status", "open"),
                 "created_at": datetime.now().isoformat()
             }
             table.put_item(Item=task)
@@ -69,6 +69,72 @@ def handler(event, context):
                 "headers": {"Content-Type": "application/json"},
                 "body": json.dumps({"message": "Task created", "task": task})
             }
+
+        # POST /tasks/{id}/prioritize — автопріоритет за тональністю
+        elif http_method == "POST" and task_id and len(path_parts) == 3 and path_parts[2] == "prioritize":
+            result = table.get_item(Key={"id": task_id})
+            task = result.get("Item")
+
+            if not task:
+                return {
+                    "statusCode": 404,
+                    "body": json.dumps({"message": "Task not found"})
+                }
+
+            try:
+                title = task.get("title", "")
+                sentiment_result = comprehend.detect_sentiment(
+                    Text=title,
+                    LanguageCode="en"
+                )
+                sentiment = sentiment_result["Sentiment"]
+                score = sentiment_result["SentimentScore"]
+
+                # Негативна тональність → підвищуємо пріоритет до high
+                new_priority = task.get("priority", "medium")
+                if sentiment == "NEGATIVE":
+                    new_priority = "high"
+
+                update_result = table.update_item(
+                    Key={"id": task_id},
+                    UpdateExpression="SET priority = :priority, sentiment = :sentiment, sentiment_score = :score, updated_at = :updated_at",
+                    ExpressionAttributeValues={
+                        ":priority": new_priority,
+                        ":sentiment": sentiment,
+                        ":score": str(score),
+                        ":updated_at": datetime.now().isoformat()
+                    },
+                    ReturnValues="ALL_NEW"
+                )
+                updated_task = update_result.get("Attributes", {})
+                write_audit_log("PRIORITIZE_TASK", {
+                    "id": task_id,
+                    "sentiment": sentiment,
+                    "new_priority": new_priority
+                })
+
+                return {
+                    "statusCode": 200,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps({
+                        "message": "Task prioritized",
+                        "sentiment": sentiment,
+                        "new_priority": new_priority,
+                        "task": updated_task
+                    })
+                }
+
+            except Exception as ai_error:
+                # Graceful degradation — якщо Comprehend недоступний
+                print(f"Comprehend error: {str(ai_error)}")
+                return {
+                    "statusCode": 200,
+                    "headers": {"Content-Type": "application/json"},
+                    "body": json.dumps({
+                        "message": "Prioritization unavailable, task unchanged",
+                        "task": task
+                    })
+                }
 
         # PUT /tasks/{id} — оновлення статусу
         elif http_method == "PUT" and task_id:
