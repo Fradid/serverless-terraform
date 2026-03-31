@@ -6,30 +6,48 @@ locals {
   prefix = "klochko-bohdan-04"
 }
 
-# Виклик модуля бази даних
-module "database" {
-  source     = "../../modules/dynamodb"
-  table_name = "${local.prefix}-table"
+# S3 бакет для audit-log
+resource "aws_s3_bucket" "audit_log" {
+  bucket        = "${local.prefix}-audit-log"
+  force_destroy = true # дозволяє видалити бакет з файлами при terraform destroy
 }
 
-# Виклик модуля обчислень з передачею ARN та імені таблиці
+# Блокування публічного доступу до бакету
+resource "aws_s3_bucket_public_access_block" "audit_log" {
+  bucket = aws_s3_bucket.audit_log.id
+
+  block_public_acls       = true
+  block_public_policy     = true
+  ignore_public_acls      = true
+  restrict_public_buckets = true
+}
+
+module "database" {
+  source     = "../../modules/dynamodb"
+  table_name = "${local.prefix}-tasks"
+}
+
 module "backend" {
   source              = "../../modules/lambda"
-  function_name       = "${local.prefix}-api-handler"
+  function_name       = "${local.prefix}-tasks-handler"
   source_file         = "${path.root}/../../src/app.py"
   dynamodb_table_arn  = module.database.table_arn
   dynamodb_table_name = module.database.table_name
+  log_bucket_name     = aws_s3_bucket.audit_log.bucket
+  log_bucket_arn      = aws_s3_bucket.audit_log.arn
 }
 
-# Виклик модуля шлюзу API
 module "api" {
   source               = "../../modules/api_gateway"
-  api_name             = "${local.prefix}-http-api"
+  api_name             = "${local.prefix}-tasks-api"
   lambda_invoke_arn    = module.backend.invoke_arn
   lambda_function_name = module.backend.function_name
 }
 
-# Вивід URL розгорнутого API (використовується у кроці 6)
 output "api_url" {
   value = module.api.api_endpoint
+}
+
+output "audit_log_bucket" {
+  value = aws_s3_bucket.audit_log.bucket
 }
