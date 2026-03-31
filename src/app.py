@@ -35,10 +35,13 @@ def write_audit_log(action, data):
 
 def handler(event, context):
     try:
-        http_method = event["requestContext"]["httpMethod"]
+        
+        http_method = event.get("httpMethod", "")
         path = event.get("path", "")
-        path_params = event.get("pathParameters") or {}
         query_params = event.get("queryStringParameters") or {}
+        proxy = (event.get("pathParameters") or {}).get("proxy", "")
+        path_parts = proxy.split("/")
+        task_id = path_parts[1] if len(path_parts) > 1 else None
 
         # POST /tasks — створення завдання
         if http_method == "POST" and path == "/tasks":
@@ -68,8 +71,7 @@ def handler(event, context):
             }
 
         # PUT /tasks/{id} — оновлення статусу
-        elif http_method == "PUT" and path_params.get("id"):
-            task_id = path_params["id"]
+        elif http_method == "PUT" and task_id:
             body = json.loads(event.get("body") or "{}")
 
             new_status = body.get("status")
@@ -99,7 +101,7 @@ def handler(event, context):
             }
 
         # GET /tasks?status=open — отримання списку з фільтрацією
-        elif http_method == "GET" and path == "/tasks":
+        elif http_method == "GET" and path.startswith("/tasks"):
             status_filter = query_params.get("status")
 
             if status_filter:
